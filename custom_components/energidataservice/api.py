@@ -92,5 +92,4 @@ class Energidataservice:
     def tomorrow(self):
         """Return raw dataset for today."""
         date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-        _LOGGER.debug("Date: %s", date)
         return prepare_data(self._result, date, self._tz)

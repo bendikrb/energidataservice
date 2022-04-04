@@ -1,6 +1,6 @@
 """Support for Energi Data Service sensor."""
 from collections import namedtuple
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 
 from homeassistant.components import sensor
@@ -13,6 +13,8 @@ import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.template import Template, attach
 from homeassistant.util import dt as dt_utils, slugify as util_slugify
+import pytz
+from pytz import timezone
 from jinja2 import pass_context
 
 from .const import (
@@ -182,6 +184,12 @@ class EnergidataserviceSensor(EnergidataserviceEntity):
         self._today_mean = None
         self._tomorrow_mean = None
 
+        # Holds cheapest period
+        self._cheap = None
+
+        # Holds most expensive period
+        self._expensive = None
+
         # Check incase the sensor was setup using config flow.
         # This blow up if the template isnt valid.
         if not isinstance(self._cost_template, Template):
@@ -194,6 +202,45 @@ class EnergidataserviceSensor(EnergidataserviceEntity):
                 self._cost_template = cv.template(DEFAULT_TEMPLATE)
 
         attach(self._hass, self._cost_template)
+
+    def _get_cheap_and_expensive_period(self, before, length: int) -> list:
+        """Get the cheapest period of the given length in hours."""
+        data = self.raw_today
+        if self.tomorrow_valid:
+            data += self.raw_tomorrow
+
+        local_tz = pytz.timezone(self._hass.config.time_zone)
+        now = datetime.now().astimezone(local_tz)
+        before = local_tz.localize(
+            datetime.strptime(
+                f"{now.month}/{now.day}/{now.year} {before}", "%d/%m/%Y %H:%M:%S"
+            ).replace(tzinfo=None)
+        )
+        if now.hour > before.hour:
+            before += timedelta(days=1)
+
+        index_start = now.hour
+        index_end = (
+            data.index(
+                max(
+                    (n for n in data if n["hour"].hour == before.hour),
+                    key=lambda k: k["hour"],
+                )
+            )
+            - length
+        )
+
+        res = []
+        for index in range(index_start, index_end):
+            start = data[index]["hour"]
+            end = data[index + length]["hour"]
+            current_total = 0
+            for i in range(index, index + length):
+                current_total += data[i]["price"]
+            Result = namedtuple("Result", "start end total")
+            res.append(Result(start, end, round(current_total, self._decimals)))
+
+        return [min(res, key=lambda k: k.total), max(res, key=lambda k: k.total)]
 
     async def validate_data(self) -> None:
         """Validate sensor data."""
@@ -240,6 +287,10 @@ class EnergidataserviceSensor(EnergidataserviceEntity):
             )
         else:
             self._tomorrow_mean = None
+
+        cheap_expensive = self._get_cheap_and_expensive_period("6:45:00", 4)
+        self._cheap = cheap_expensive[0]
+        self._expensive = cheap_expensive[1]
 
         self.async_write_ha_state()
 
@@ -320,6 +371,8 @@ class EnergidataserviceSensor(EnergidataserviceEntity):
             "tomorrow_min": self.tomorrow_min,
             "tomorrow_max": self.tomorrow_max,
             "tomorrow_mean": self.tomorrow_mean,
+            "cheapest": self._cheap,
+            "most_expensive": self._expensive,
         }
 
     @property
