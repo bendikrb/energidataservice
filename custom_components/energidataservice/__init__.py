@@ -1,4 +1,8 @@
 """Adds support for Energi Data Service spot prices."""
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from functools import partial
 import logging
@@ -6,10 +10,20 @@ from random import randint
 
 import aiohttp
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.const import Platform
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.dispatcher import (
+    async_dispatcher_connect,
+    async_dispatcher_send,
+)
+from homeassistant.helpers.entity import Entity
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_call_later, async_track_time_change
+from homeassistant.helpers.update_coordinator import (
+    CoordinatorEntity,
+    DataUpdateCoordinator,
+)
 from homeassistant.loader import async_get_integration
 from pytz import timezone
 import voluptuous as vol
@@ -22,6 +36,7 @@ from .const import (
     STARTUP,
     UPDATE_EDS,
 )
+from .device import DeviceState, State
 from .events import async_track_time_change_in_tz  # type: ignore
 
 RANDOM_MINUTE = randint(0, 10)
@@ -31,6 +46,9 @@ RETRY_MINUTES = 10
 MAX_RETRY_MINUTES = 120
 
 _LOGGER = logging.getLogger(__name__)
+
+# Available platforms for integration
+_PLATFORMS = [Platform.SENSOR]  # , Platform.NUMBER]
 
 
 async def async_setup(hass: HomeAssistant, config: dict):
@@ -59,15 +77,41 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.debug("Entry options: %s", entry.options)
     result = await _setup(hass, entry)
 
-    hass.async_create_task(
-        hass.config_entries.async_forward_entry_setup(entry, "sensor")
-    )
+    # for platform in _PLATFORMS:
+    #     hass.async_create_task(
+    #         hass.config_entries.async_forward_entry_setup(entry, platform)
+    #     )
 
-    return result
+    # return result
+    hass.config_entries.async_setup_platforms(entry, _PLATFORMS)
+    return True
+
+
+@callback
+def async_setup_entry_platform(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+    constructor: Callable[[DeviceState], list[Entity]],
+) -> None:
+    """Set up a platform with added entities."""
+
+    entry_state = hass.data[DOMAIN][entry.entry_id]
+    _LOGGER.debug("Entry_state: %s", entry_state)
+    async_add_entities(entity for entity in constructor(entry_state))
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    unload_ok = all(
+        await asyncio.gather(
+            *[
+                hass.config_entries.async_forward_entry_unload(entry, platform)
+                for platform in _PLATFORMS
+            ]
+        )
+    )
+
     unload_ok = await hass.config_entries.async_forward_entry_unload(entry, "sensor")
 
     if unload_ok:
@@ -155,6 +199,8 @@ class EDSConnector:
         self._last_tick = None
         self._tomorrow_valid = False
         self._entry_id = entry_id
+        self.p_length = None
+        self.p_before = None
 
         self.today = None
         self.tomorrow = None
@@ -233,6 +279,16 @@ class EDSConnector:
     def entry_id(self):
         """Return entry_id."""
         return self._entry_id
+
+    @property
+    def period_length(self) -> int:
+        """Return lengt for period calculations."""
+        return self.p_length
+
+    @property
+    def period_before(self) -> int:
+        """Return deadline for period calculations."""
+        return self.p_before
 
 
 def retry_update(self):

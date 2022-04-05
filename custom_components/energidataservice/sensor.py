@@ -1,22 +1,30 @@
 """Support for Energi Data Service sensor."""
+from __future__ import annotations
+
 from collections import namedtuple
 from datetime import datetime, timedelta
 import logging
 
 from homeassistant.components import sensor
-from homeassistant.components.sensor import SensorStateClass
+from homeassistant.components.sensor import SensorStateClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, DEVICE_CLASS_MONETARY
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity import DeviceInfo, Entity, EntityCategory
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.template import Template, attach
+from homeassistant.helpers.update_coordinator import (
+    CoordinatorEntity,
+    DataUpdateCoordinator,
+)
 from homeassistant.util import dt as dt_utils, slugify as util_slugify
 import pytz
-from pytz import timezone
 from jinja2 import pass_context
 
+from . import async_setup_entry_platform
 from .const import (
     AREA_MAP,
     CENT_MULTIPLIER,
@@ -31,17 +39,49 @@ from .const import (
     UNIT_TO_MULTIPLIER,
     UPDATE_EDS,
 )
+from .device import DeviceState, State
 from .entity import EnergidataserviceEntity
 from .utils.regionhandler import RegionHandler
 
 _LOGGER = logging.getLogger(__name__)
 
 
-async def async_setup_entry(hass, config_entry: ConfigEntry, async_add_devices):
-    """Setup sensor platform from a config entry."""
-    config = config_entry
-    _setup(hass, config, async_add_devices)
-    return True
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up sensor platform from a config entry."""
+
+    def _constructor(device_state: DeviceState) -> list[Entity]:
+        """Setup the platform."""
+        config = config_entry
+        area = config.options.get(CONF_AREA) or config.data.get(CONF_AREA)
+        region = RegionHandler(area)
+        _LOGGER.debug("Timezone set in ha %s", hass.config.time_zone)
+        _LOGGER.debug("Currency set in ha %s", hass.config.currency)
+        _LOGGER.debug("Country: %s", region.country)
+        _LOGGER.debug("Region: %s", region.name)
+        _LOGGER.debug("Region description: %s", region.description)
+        _LOGGER.debug("Region currency %s", region.currency.name)
+        _LOGGER.debug(
+            "Show in cent: %s", config.options.get(CONF_CURRENCY_IN_CENT) or False
+        )
+        _LOGGER.debug("Domain %s", DOMAIN)
+
+        if region.currency.name != hass.config.currency:
+            _LOGGER.warning(
+                "Official currency for %s is %s but Home Assistant reports %s from config and will show prices in %s",  # pylint: disable=line-too-long
+                region.country,
+                region.currency.name,
+                hass.config.currency,
+                hass.config.currency,
+            )
+            region.set_region(area, hass.config.currency)
+
+        return [EnergidataserviceSensor(device_state.coordinator, config, hass, region)]
+
+    async_setup_entry_platform(hass, config_entry, async_add_entities, _constructor)
 
 
 def mean(data: list) -> float:
@@ -56,34 +96,35 @@ def mean(data: list) -> float:
     return val / num
 
 
-def _setup(hass, config: ConfigEntry, add_devices):
-    """Setup the platform."""
-    area = config.options.get(CONF_AREA) or config.data.get(CONF_AREA)
-    region = RegionHandler(area)
-    _LOGGER.debug("Timezone set in ha %s", hass.config.time_zone)
-    _LOGGER.debug("Currency set in ha %s", hass.config.currency)
-    _LOGGER.debug("Country: %s", region.country)
-    _LOGGER.debug("Region: %s", region.name)
-    _LOGGER.debug("Region description: %s", region.description)
-    _LOGGER.debug("Region currency %s", region.currency.name)
-    _LOGGER.debug(
-        "Show in cent: %s", config.options.get(CONF_CURRENCY_IN_CENT) or False
-    )
-    _LOGGER.debug("Domain %s", DOMAIN)
+# def _setup(hass, config: ConfigEntry, add_devices):
+#     """Setup the platform."""
+#     area = config.options.get(CONF_AREA) or config.data.get(CONF_AREA)
+#     region = RegionHandler(area)
+#     _LOGGER.debug("Timezone set in ha %s", hass.config.time_zone)
+#     _LOGGER.debug("Currency set in ha %s", hass.config.currency)
+#     _LOGGER.debug("Country: %s", region.country)
+#     _LOGGER.debug("Region: %s", region.name)
+#     _LOGGER.debug("Region description: %s", region.description)
+#     _LOGGER.debug("Region currency %s", region.currency.name)
+#     _LOGGER.debug(
+#         "Show in cent: %s", config.options.get(CONF_CURRENCY_IN_CENT) or False
+#     )
+#     _LOGGER.debug("Domain %s", DOMAIN)
 
-    if region.currency.name != hass.config.currency:
-        _LOGGER.warning(
-            "Official currency for %s is %s but Home Assistant reports %s from config and will show prices in %s",  # pylint: disable=line-too-long
-            region.country,
-            region.currency.name,
-            hass.config.currency,
-            hass.config.currency,
-        )
-        region.set_region(area, hass.config.currency)
+#     if region.currency.name != hass.config.currency:
+#         _LOGGER.warning(
+#             "Official currency for %s is %s but Home Assistant reports %s from config and will show prices in %s",  # pylint: disable=line-too-long
+#             region.country,
+#             region.currency.name,
+#             hass.config.currency,
+#             hass.config.currency,
+#         )
+#         region.set_region(area, hass.config.currency)
 
-    sens = EnergidataserviceSensor(config, hass, region)
+#     sens = EnergidataserviceSensor(config, hass, region)
 
-    add_devices([sens])
+#     add_devices(hass, config, add_devices, sens)
+#     # add_devices([sens])
 
 
 @callback
@@ -124,11 +165,18 @@ def _async_migrate_unique_id(hass: HomeAssistant, entity: str, new_id: str) -> N
         _LOGGER.debug("- Check didn't find anything")
 
 
-class EnergidataserviceSensor(EnergidataserviceEntity):
+# class EnergidataserviceSensor(EnergidataserviceEntity):
+class EnergidataserviceSensor(
+    CoordinatorEntity[DataUpdateCoordinator[State]], SensorEntity
+):
     """Representation of Energi Data Service data."""
 
     def __init__(
-        self, config: ConfigEntry, hass: HomeAssistant, region: RegionHandler
+        self,
+        coordinator: DataUpdateCoordinator[State],
+        config: ConfigEntry,
+        hass: HomeAssistant,
+        region: RegionHandler,
     ) -> None:
         """Initialize Energidataservice sensor."""
         self._config = config
@@ -158,12 +206,16 @@ class EnergidataserviceSensor(EnergidataserviceEntity):
             self._vat = 0.25
         else:
             self._vat = 0
+        # super().__init__(self._name, region.description, "price_sensor")
+        # super().__init__(coordinator)
 
         self._entity_id = sensor.ENTITY_ID_FORMAT.format(
             util_slugify(f"{self._name} {self._area}")
         )
         self._unique_id = util_slugify(f"{self._name}_{self._entry_id}")
         _async_migrate_unique_id(hass, self._entity_id, self._unique_id)
+
+        _LOGGER.debug("Sensor unique id: %s", self._unique_id)
 
         # Holds current price
         self._state = None
@@ -230,6 +282,11 @@ class EnergidataserviceSensor(EnergidataserviceEntity):
             - length
         )
 
+        if index_end < index_start:
+            index_end = len(data) - length
+        if index_end < index_start:
+            index_end = len(data)
+
         res = []
         for index in range(index_start, index_end):
             start = data[index]["hour"]
@@ -240,7 +297,10 @@ class EnergidataserviceSensor(EnergidataserviceEntity):
             Result = namedtuple("Result", "start end total")
             res.append(Result(start, end, round(current_total, self._decimals)))
 
-        return [min(res, key=lambda k: k.total), max(res, key=lambda k: k.total)]
+        res_min = min(res, key=lambda k: k.total)
+        res_max = max(res, key=lambda k: k.total)
+
+        return [res_min, res_max]
 
     async def validate_data(self) -> None:
         """Validate sensor data."""
