@@ -18,6 +18,8 @@ from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
 )
+
+from . import async_setup_entry_platform
 from .const import (
     ATTR_HOUR,
     CONF_AREA,
@@ -53,7 +55,7 @@ async def async_setup_entry(hass, config_entry: ConfigEntry, async_add_entities)
 
     # _setup(hass, config, async_add_devices)
     # return True
-     async_setup_entry_platform(hass, config_entry, async_add_entities, _constructor)
+    async_setup_entry_platform(hass, config_entry, async_add_entities, _constructor)
 
 
 

@@ -79,7 +79,7 @@ async def async_setup_entry(
             )
             region.set_region(area, hass.config.currency)
 
-        return [EnergidataserviceSensor(device_state.coordinator, config, hass, region)]
+        return [EnergidataserviceSensor(config, hass, region)]
 
     async_setup_entry_platform(hass, config_entry, async_add_entities, _constructor)
 
@@ -94,37 +94,6 @@ def mean(data: list) -> float:
         num += 1
 
     return val / num
-
-
-# def _setup(hass, config: ConfigEntry, add_devices):
-#     """Setup the platform."""
-#     area = config.options.get(CONF_AREA) or config.data.get(CONF_AREA)
-#     region = RegionHandler(area)
-#     _LOGGER.debug("Timezone set in ha %s", hass.config.time_zone)
-#     _LOGGER.debug("Currency set in ha %s", hass.config.currency)
-#     _LOGGER.debug("Country: %s", region.country)
-#     _LOGGER.debug("Region: %s", region.name)
-#     _LOGGER.debug("Region description: %s", region.description)
-#     _LOGGER.debug("Region currency %s", region.currency.name)
-#     _LOGGER.debug(
-#         "Show in cent: %s", config.options.get(CONF_CURRENCY_IN_CENT) or False
-#     )
-#     _LOGGER.debug("Domain %s", DOMAIN)
-
-#     if region.currency.name != hass.config.currency:
-#         _LOGGER.warning(
-#             "Official currency for %s is %s but Home Assistant reports %s from config and will show prices in %s",  # pylint: disable=line-too-long
-#             region.country,
-#             region.currency.name,
-#             hass.config.currency,
-#             hass.config.currency,
-#         )
-#         region.set_region(area, hass.config.currency)
-
-#     sens = EnergidataserviceSensor(config, hass, region)
-
-#     add_devices(hass, config, add_devices, sens)
-#     # add_devices([sens])
 
 
 @callback
