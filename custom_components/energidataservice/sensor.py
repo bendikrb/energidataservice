@@ -6,7 +6,8 @@ from datetime import datetime, timedelta
 import logging
 
 from homeassistant.components import sensor
-from homeassistant.components.sensor import SensorStateClass, SensorEntity
+
+from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, DEVICE_CLASS_MONETARY
 from homeassistant.core import HomeAssistant, callback
@@ -134,11 +135,13 @@ def _async_migrate_unique_id(hass: HomeAssistant, entity: str, new_id: str) -> N
         _LOGGER.debug("- Check didn't find anything")
 
 
-# class EnergidataserviceSensor(EnergidataserviceEntity):
+# class EnergidataserviceSensor(EnergidataserviceEntity, SensorEntity):
 class EnergidataserviceSensor(
     CoordinatorEntity[DataUpdateCoordinator[State]], SensorEntity
 ):
     """Representation of Energi Data Service data."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(
         self,
@@ -428,6 +431,11 @@ class EnergidataserviceSensor(
         }
 
     @property
+    def state_class(self) -> str:
+        """Return the state class of the sensor."""
+        return self._attr_state_class
+
+    @property
     def today(self) -> list:
         """Get todays prices
         Returns:
@@ -470,6 +478,11 @@ class EnergidataserviceSensor(
         return self._tomorrow_raw
 
     @property
+    def state_class(self) -> str:
+        """Return the state class of the sensor."""
+        return self._attr_state_class
+
+    @property
     def tomorrow_valid(self):
         """Return state of tomorrow_valid."""
         return self._api.tomorrow_valid
@@ -503,11 +516,6 @@ class EnergidataserviceSensor(
     def tomorrow_mean(self):
         """Return mean value for tomorrow."""
         return self._tomorrow_mean
-
-    @property
-    def state_class(self) -> SensorStateClass.MEASUREMENT:
-        """Return the state class of this entity."""
-        return SensorStateClass.MEASUREMENT
 
     def _calculate(self, value=None, fake_dt=None) -> float:
         """Do price calculations"""
