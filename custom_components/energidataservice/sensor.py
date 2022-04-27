@@ -27,7 +27,6 @@ from jinja2 import pass_context
 
 from . import async_setup_entry_platform
 from .const import (
-    AREA_MAP,
     CENT_MULTIPLIER,
     CONF_AREA,
     CONF_CURRENCY_IN_CENT,
@@ -40,8 +39,6 @@ from .const import (
     UNIT_TO_MULTIPLIER,
     UPDATE_EDS,
 )
-from .device import DeviceState, State
-from .entity import EnergidataserviceEntity
 from .utils.regionhandler import RegionHandler
 
 _LOGGER = logging.getLogger(__name__)
@@ -141,8 +138,6 @@ class EnergidataserviceSensor(
 ):
     """Representation of Energi Data Service data."""
 
-    _attr_state_class = SensorStateClass.MEASUREMENT
-
     def __init__(
         self,
         coordinator: DataUpdateCoordinator[State],
@@ -151,13 +146,12 @@ class EnergidataserviceSensor(
         region: RegionHandler,
     ) -> None:
         """Initialize Energidataservice sensor."""
+        self._attr_state_class = SensorStateClass.MEASUREMENT
         self._config = config
         self.region = region
         self._entry_id = config.entry_id
         self._cent = config.options.get(CONF_CURRENCY_IN_CENT) or False
-        self._area = (
-            region.description
-        )  # config.options.get(CONF_AREA) or config.data.get(CONF_AREA)
+        self._area = region.description
         self._currency = hass.config.currency
         self._price_type = config.options.get(CONF_PRICETYPE) or config.data.get(
             CONF_PRICETYPE
@@ -282,7 +276,10 @@ class EnergidataserviceSensor(
             _LOGGER.debug("No sensor data found - calling update")
             await self._api.update()
             # self._api.today =
-            await self._hass.async_add_executor_job(self._format_list, self._api.today)
+            if not self._api.today is None:
+                await self._hass.async_add_executor_job(
+                    self._format_list, self._api.today
+                )
 
         if self.tomorrow_valid:
             if not self._api.tomorrow_calculated:
@@ -296,22 +293,23 @@ class EnergidataserviceSensor(
             self._tomorrow_raw = None
             self._api.tomorrow_calculated = False
 
-        if not self._api.today_calculated:
+        if not self._api.today_calculated and not self._api.today is None:
             await self._hass.async_add_executor_job(self._format_list, self._api.today)
 
         # Updates price for this hour.
         self._get_current_price()
 
         # Update attributes
-        self._today_raw = self._add_raw(self._api.today)
+        if self._api.today:
+            self._today_raw = self._add_raw(self._api.today)
 
-        self._today_min = self._get_specific("min", self._api.today)
-        self._today_max = self._get_specific("max", self._api.today)
-        self._tomorrow_min = self._get_specific("min", self._api.tomorrow)
-        self._tomorrow_max = self._get_specific("max", self._api.tomorrow)
-        self._today_mean = round(
-            self._get_specific("mean", self._api.today), self._decimals
-        )
+            self._today_min = self._get_specific("min", self._api.today)
+            self._today_max = self._get_specific("max", self._api.today)
+            self._today_mean = round(
+                self._get_specific("mean", self._api.today), self._decimals
+            )
+            self._tomorrow_min = self._get_specific("min", self._api.tomorrow)
+            self._tomorrow_max = self._get_specific("max", self._api.tomorrow)
 
         if self.tomorrow_valid:
             self._tomorrow_mean = round(
@@ -336,15 +334,20 @@ class EnergidataserviceSensor(
             .replace(minute=0)
             .isoformat()
         )
-        _LOGGER.debug(self._api.today)
+        # _LOGGER.debug(self._api.today)
         if self._api.today:
             for dataset in self._api.today:
                 if dataset.hour == current_state_time:
                     self._state = dataset.price
-                    _LOGGER.debug("Current price updated to %f", self._state)
+                    _LOGGER.debug(
+                        "Current price updated to %f for %s",
+                        self._state,
+                        self.region.region,
+                    )
                     break
         else:
-            _LOGGER.debug("No data found, can't update _state")
+            self._state = None
+            _LOGGER.debug("No data found for %s", self.region.region)
 
     async def async_added_to_hass(self):
         """Connect to dispatcher listening for entity data notifications."""
@@ -389,8 +392,8 @@ class EnergidataserviceSensor(
             "current_price": self.state,
             "unit": self.unit,
             "currency": self._currency,
-            "area": self._area,
-            "area_code": AREA_MAP[self._area],
+            "region": self._area,
+            "region_code": self.region.region,
             "tomorrow_valid": self.tomorrow_valid,
             "next_data_update": self._api.next_data_refresh,
             "today": self.today,
@@ -405,6 +408,7 @@ class EnergidataserviceSensor(
             "tomorrow_mean": self.tomorrow_mean,
             "cheapest": self._cheap,
             "most_expensive": self._expensive,
+            "attribution": f"Data sourced from {self._api.source}",
         }
 
     @property
@@ -426,7 +430,7 @@ class EnergidataserviceSensor(
         return {
             "identifiers": {(DOMAIN, self.unique_id)},
             "name": self.name,
-            "model": f"Area code: {AREA_MAP[self._area]}",
+            "model": f"Region code: {self.region.region}",
             "manufacturer": "Energi Data Service",
         }
 
@@ -441,8 +445,10 @@ class EnergidataserviceSensor(
         Returns:
             list: sorted list where today[0] is the price of hour 00.00 - 01.00
         """
-
-        return [i.price for i in self._api.today if i]
+        if not self._api.today is None:
+            return [i.price for i in self._api.today if i]
+        else:
+            return None
 
     @property
     def tomorrow(self) -> list:
@@ -476,11 +482,6 @@ class EnergidataserviceSensor(
     def raw_tomorrow(self):
         """Return the raw array with tomorrows prices."""
         return self._tomorrow_raw
-
-    @property
-    def state_class(self) -> str:
-        """Return the state class of the sensor."""
-        return self._attr_state_class
 
     @property
     def tomorrow_valid(self):
@@ -575,7 +576,12 @@ class EnergidataserviceSensor(
             self._api.today_calculated = True
             self._api.today = formatted_pricelist
 
-        _LOGGER.debug("Calculation for %s took %s seconds", _calc_for, _ttf)
+        _LOGGER.debug(
+            "Calculation for %s in %s took %s seconds",
+            _calc_for,
+            self.region.region,
+            _ttf,
+        )
 
     @staticmethod
     def _get_specific(datatype: str, data: list):
