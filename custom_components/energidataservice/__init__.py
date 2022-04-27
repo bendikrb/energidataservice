@@ -16,7 +16,6 @@ import voluptuous as vol
 
 from .api import Energidataservice
 from .const import AREA_MAP, CONF_AREA, DOMAIN, STARTUP, UPDATE_EDS
-from .events import async_track_time_change_in_tz  # type: ignore
 
 RANDOM_MINUTE = randint(0, 10)
 RANDOM_SECOND = randint(0, 59)
@@ -113,22 +112,20 @@ async def _setup(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         async_dispatcher_send(hass, UPDATE_EDS)
 
     # Handle dataset updates
-    update_tomorrow = async_track_time_change_in_tz(
+    update_tomorrow = async_track_time_change(
         hass,
         get_new_data,
         hour=13,
         minute=RANDOM_MINUTE,
         second=RANDOM_SECOND,
-        tz=timezone("Europe/Copenhagen"),
     )
 
-    update_new_day = async_track_time_change_in_tz(
+    update_new_day = async_track_time_change(
         hass,
         new_day,
         hour=0,
         minute=0,
         second=0,
-        tz=timezone("Europe/Copenhagen"),
     )
 
     update_new_hour = async_track_time_change(hass, new_hour, minute=0, second=0)
