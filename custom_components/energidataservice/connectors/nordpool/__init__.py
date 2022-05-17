@@ -2,16 +2,15 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta
 import logging
 
-from datetime import datetime, timedelta
 from dateutil.parser import parse as parse_dt
-
 import pytz
 
+from ...const import INTERVAL
 from .mapping import map_region
 from .regions import REGIONS
-from ...const import INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,7 +28,7 @@ def prepare_data(indata, date, tz) -> list:  # pylint: disable=invalid-name
     for dataset in indata:
         tmpdate = (
             datetime.fromisoformat(dataset["HourUTC"])
-            .replace(tzinfo=pytz.utc)
+            # .replace(tzinfo=pytz.utc)
             .astimezone(local_tz)
         )
         tmp = INTERVAL(dataset["SpotPriceEUR"], local_tz.normalize(tmpdate))
@@ -93,6 +92,8 @@ class Connector:
 
     def _parse_json(self, data):
         """Parse json response"""
+        # Timezone for data from Nord Pool Group are "Europe/Stockholm"
+        timezone = pytz.timezone("Europe/Stockholm")
 
         if not "data" in data:
             return []
@@ -109,7 +110,11 @@ class Connector:
 
         # Loop through response rows
         for row in data["Rows"]:
-            row_start_time = row["StartTime"]
+            start_hour = datetime.isoformat(
+                timezone.localize(datetime.fromisoformat(row["StartTime"])).astimezone(
+                    pytz.utc
+                )
+            )
 
             # Loop through columns
             for col in row["Columns"]:
@@ -118,13 +123,24 @@ class Connector:
                 if region and name not in region:
                     continue
 
+                # Check if we already have this hour in dict
+                known = False
+                for i, val in enumerate(region_data):  # pylint: disable=unused-variable
+                    if start_hour == val["HourUTC"]:
+                        known = True
+                        break
+
+                if known:
+                    # We already have this hour in dict, skip to next
+                    continue
+
                 value = self._conv_to_float(col["Value"])
                 if not value:
                     continue
 
                 region_data.append(
                     {
-                        "HourUTC": f"{row_start_time}+00:00",
+                        "HourUTC": start_hour,
                         "SpotPriceEUR": value,
                     }
                 )
@@ -159,10 +175,6 @@ class Connector:
 class BadRequest(Exception):
     """Representation of a Bad Request exception."""
 
-    pass
-
 
 class InvalidRequest(Exception):
     """Representation of an Invalid Request."""
-
-    pass
